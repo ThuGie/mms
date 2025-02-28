@@ -15,8 +15,8 @@ class ImageProcessor {
     /**
      * Image formats
      */
-    const FORMAT_WEBP = 'webp';
-    const FORMAT_AVIF = 'avif';
+    public const FORMAT_WEBP = 'webp';
+    public const FORMAT_AVIF = 'avif';
 
     /**
      * Default quality settings
@@ -113,6 +113,13 @@ class ImageProcessor {
             'output' => $output_path,
         ));
         
+        // Validate output path
+        $output_path = $this->sanitize_path($output_path);
+        if (!$output_path) {
+            $this->logger->error('Invalid output path');
+            return false;
+        }
+        
         // Use default format if not specified
         if ($format === null) {
             $format = $this->default_format;
@@ -136,8 +143,14 @@ class ImageProcessor {
             $image_details = array();
             
             foreach ($images as $image_path) {
+                // Validate image path
+                if (!file_exists($image_path) || !is_file($image_path)) {
+                    $this->logger->warning('Image file does not exist', array('path' => $image_path));
+                    continue;
+                }
+                
                 // Get image size
-                $size = getimagesize($image_path);
+                $size = @getimagesize($image_path);
                 
                 if (!$size) {
                     $this->logger->warning('Failed to get image size', array('path' => $image_path));
@@ -194,8 +207,19 @@ class ImageProcessor {
      * @return string|false Output path or false on failure
      */
     private function merge_images_gd($image_details, $output_path, $format, $total_width, $total_height) {
+        // Check for GD extension
+        if (!extension_loaded('gd')) {
+            $this->logger->error('GD extension not available');
+            return false;
+        }
+        
         // Create destination image
-        $dest = imagecreatetruecolor($total_width, $total_height);
+        $dest = @imagecreatetruecolor($total_width, $total_height);
+        
+        if (!$dest) {
+            $this->logger->error('Failed to create destination image with GD');
+            return false;
+        }
         
         // Set background color to white
         $white = imagecolorallocate($dest, 255, 255, 255);
@@ -257,50 +281,56 @@ class ImageProcessor {
      * @return string|false Output path or false on failure
      */
     private function merge_images_imagick($image_details, $output_path, $format, $total_width, $total_height) {
-        // Create destination image
-        $dest = new \Imagick();
-        $dest->newImage($total_width, $total_height, new \ImagickPixel('white'));
-        $dest->setImageFormat($format);
-        
-        // Set quality
-        if ($format === self::FORMAT_WEBP) {
-            $dest->setImageCompressionQuality($this->quality_webp);
-        } elseif ($format === self::FORMAT_AVIF) {
-            $dest->setImageCompressionQuality($this->quality_avif);
+        // Check for Imagick extension
+        if (!extension_loaded('imagick')) {
+            $this->logger->error('Imagick extension not available');
+            return false;
         }
-        
-        // Merge images
-        $current_height = 0;
-        
-        foreach ($image_details as $image) {
-            try {
-                // Load source image
-                $src = new \Imagick($image['path']);
-                
-                // Calculate position (center horizontally)
-                $x = ($total_width - $image['width']) / 2;
-                
-                // Composite image
-                $dest->compositeImage($src, \Imagick::COMPOSITE_OVER, $x, $current_height);
-                
-                // Update current height
-                $current_height += $image['height'];
-                
-                // Free memory
-                $src->clear();
-                $src->destroy();
-            } catch (\Exception $e) {
-                $this->logger->warning('Failed to process image with Imagick', array(
-                    'path' => $image['path'],
-                    'error' => $e->getMessage(),
-                ));
-            }
-        }
-        
-        // Save image
-        $output_file = $output_path . '.' . $format;
         
         try {
+            // Create destination image
+            $dest = new \Imagick();
+            $dest->newImage($total_width, $total_height, new \ImagickPixel('white'));
+            $dest->setImageFormat($format);
+            
+            // Set quality
+            if ($format === self::FORMAT_WEBP) {
+                $dest->setImageCompressionQuality($this->quality_webp);
+            } elseif ($format === self::FORMAT_AVIF) {
+                $dest->setImageCompressionQuality($this->quality_avif);
+            }
+            
+            // Merge images
+            $current_height = 0;
+            
+            foreach ($image_details as $image) {
+                try {
+                    // Load source image
+                    $src = new \Imagick($image['path']);
+                    
+                    // Calculate position (center horizontally)
+                    $x = ($total_width - $image['width']) / 2;
+                    
+                    // Composite image
+                    $dest->compositeImage($src, \Imagick::COMPOSITE_OVER, $x, $current_height);
+                    
+                    // Update current height
+                    $current_height += $image['height'];
+                    
+                    // Free memory
+                    $src->clear();
+                    $src->destroy();
+                } catch (\Exception $e) {
+                    $this->logger->warning('Failed to process image with Imagick', array(
+                        'path' => $image['path'],
+                        'error' => $e->getMessage(),
+                    ));
+                }
+            }
+            
+            // Save image
+            $output_file = $output_path . '.' . $format;
+            
             $result = $dest->writeImage($output_file);
             
             // Free memory
@@ -314,14 +344,10 @@ class ImageProcessor {
             
             return $output_file;
         } catch (\Exception $e) {
-            $this->logger->error('Error saving merged image with Imagick', array(
-                'path' => $output_file,
+            $this->logger->error('Error processing images with Imagick', array(
                 'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
             ));
-            
-            // Free memory
-            $dest->clear();
-            $dest->destroy();
             
             return false;
         }
@@ -335,23 +361,31 @@ class ImageProcessor {
      * @return resource|false GD image resource or false on failure
      */
     private function load_image_gd($path, $mime) {
-        switch ($mime) {
-            case 'image/jpeg':
-                return imagecreatefromjpeg($path);
-            case 'image/png':
-                return imagecreatefrompng($path);
-            case 'image/gif':
-                return imagecreatefromgif($path);
-            case 'image/webp':
-                if (function_exists('imagecreatefromwebp')) {
-                    return imagecreatefromwebp($path);
-                }
-                break;
-            case 'image/avif':
-                if (function_exists('imagecreatefromavif')) {
-                    return imagecreatefromavif($path);
-                }
-                break;
+        try {
+            switch ($mime) {
+                case 'image/jpeg':
+                    return @imagecreatefromjpeg($path);
+                case 'image/png':
+                    return @imagecreatefrompng($path);
+                case 'image/gif':
+                    return @imagecreatefromgif($path);
+                case 'image/webp':
+                    if (function_exists('imagecreatefromwebp')) {
+                        return @imagecreatefromwebp($path);
+                    }
+                    break;
+                case 'image/avif':
+                    if (function_exists('imagecreatefromavif')) {
+                        return @imagecreatefromavif($path);
+                    }
+                    break;
+            }
+        } catch (\Exception $e) {
+            $this->logger->warning('Failed to load image with GD', array(
+                'path' => $path, 
+                'mime' => $mime,
+                'error' => $e->getMessage(),
+            ));
         }
         
         return false;
@@ -366,8 +400,16 @@ class ImageProcessor {
      * @return string|false Output path or false on failure
      */
     public function convert_image($input_path, $output_path, $format = null) {
-        if (!file_exists($input_path)) {
+        // Validate input path
+        if (!file_exists($input_path) || !is_file($input_path)) {
             $this->logger->error('Input image does not exist', array('path' => $input_path));
+            return false;
+        }
+        
+        // Validate output path
+        $output_path = $this->sanitize_path($output_path);
+        if (!$output_path) {
+            $this->logger->error('Invalid output path');
             return false;
         }
         
@@ -389,7 +431,7 @@ class ImageProcessor {
         
         try {
             // Get image details
-            $size = getimagesize($input_path);
+            $size = @getimagesize($input_path);
             
             if (!$size) {
                 $this->logger->error('Failed to get image size', array('path' => $input_path));
@@ -426,6 +468,12 @@ class ImageProcessor {
      * @return string|false Output path or false on failure
      */
     private function convert_image_gd($input_path, $output_path, $format, $mime) {
+        // Check for GD extension
+        if (!extension_loaded('gd')) {
+            $this->logger->error('GD extension not available');
+            return false;
+        }
+        
         // Load source image
         $src = $this->load_image_gd($input_path, $mime);
         
@@ -439,7 +487,13 @@ class ImageProcessor {
         $height = imagesy($src);
         
         // Create destination image
-        $dest = imagecreatetruecolor($width, $height);
+        $dest = @imagecreatetruecolor($width, $height);
+        
+        if (!$dest) {
+            $this->logger->error('Failed to create destination image with GD');
+            imagedestroy($src);
+            return false;
+        }
         
         // Preserve transparency for PNG
         if ($mime === 'image/png') {
@@ -485,6 +539,12 @@ class ImageProcessor {
      * @return string|false Output path or false on failure
      */
     private function convert_image_imagick($input_path, $output_path, $format) {
+        // Check for Imagick extension
+        if (!extension_loaded('imagick')) {
+            $this->logger->error('Imagick extension not available');
+            return false;
+        }
+        
         try {
             // Load source image
             $image = new \Imagick($input_path);
@@ -522,6 +582,28 @@ class ImageProcessor {
             
             return false;
         }
+    }
+
+    /**
+     * Sanitize path for security
+     *
+     * @param string $path Path to sanitize
+     * @return string|false Sanitized path or false if invalid
+     */
+    private function sanitize_path($path) {
+        // Check for path traversal attempts
+        if (strpos($path, '..') !== false) {
+            $this->logger->error('Path traversal attempt detected', array('path' => $path));
+            return false;
+        }
+        
+        // Remove any potentially harmful characters
+        $path = preg_replace('/[^\w\s\d\.\-_\/\\\\]/', '', $path);
+        
+        // Remove any double slashes
+        $path = preg_replace('#/+#', '/', $path);
+        
+        return $path;
     }
 
     /**

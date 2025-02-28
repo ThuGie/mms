@@ -8,10 +8,10 @@ class Logger {
     /**
      * Log levels
      */
-    const INFO = 'info';
-    const WARNING = 'warning';
-    const ERROR = 'error';
-    const DEBUG = 'debug';
+    public const INFO = 'info';
+    public const WARNING = 'warning';
+    public const ERROR = 'error';
+    public const DEBUG = 'debug';
 
     /**
      * Database instance

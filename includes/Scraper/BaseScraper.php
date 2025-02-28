@@ -29,7 +29,7 @@ abstract class BaseScraper {
     /**
      * HTTP request timeout
      */
-    const REQUEST_TIMEOUT = 30;
+    public const REQUEST_TIMEOUT = 30;
 
     /**
      * Delay between requests (in seconds)
@@ -373,20 +373,107 @@ abstract class BaseScraper {
      * @param string $html HTML content
      * @return array|false AJAX data or false on failure
      */
-    public function extract_ajax_data($html) {
-        // Find the AJAX parameters for manga chapters
-        if (preg_match('/manga_id\s*:\s*(\d+)/i', $html, $manga_id_matches) &&
-            preg_match('/chapter_type\s*:\s*[\'"]([^\'"]+)[\'"]/i', $html, $chapter_type_matches) &&
-            preg_match('/_wpnonce\s*:\s*[\'"]([^\'"]+)[\'"]/i', $html, $nonce_matches)) {
-            
-            return array(
-                'action' => 'manga_get_chapters',
-                'manga' => $manga_id_matches[1],
-                'type' => $chapter_type_matches[1],
-                '_wpnonce' => $nonce_matches[1],
-            );
-        }
+/**
+ * Extract AJAX data for chapters
+ *
+ * @param string $html HTML content
+ * @return array|false AJAX data or false on failure
+ */
+public function extract_ajax_data($html) {
+    $this->logger->debug('Attempting to extract AJAX data');
+    
+    // Different pattern matching approaches for different Madara theme implementations
+    
+    // Pattern 1: Standard Madara format with manga_id, chapter_type, and wpnonce
+    if (preg_match('/manga_id\s*:\s*[\'"]?(\d+)[\'"]?/i', $html, $manga_id_matches) &&
+        preg_match('/chapter_type\s*:\s*[\'"]([^\'"]+)[\'"]/i', $html, $chapter_type_matches) &&
+        preg_match('/_wpnonce\s*:\s*[\'"]([^\'"]+)[\'"]/i', $html, $nonce_matches)) {
         
-        return false;
+        $this->logger->debug('Extracted AJAX data using pattern 1', [
+            'manga_id' => $manga_id_matches[1],
+            'type' => $chapter_type_matches[1],
+            'nonce' => $nonce_matches[1]
+        ]);
+        
+        return array(
+            'action' => 'manga_get_chapters',
+            'manga' => $manga_id_matches[1],
+            'type' => $chapter_type_matches[1],
+            '_wpnonce' => $nonce_matches[1],
+        );
     }
+    
+    // Pattern 2: Alternative format with wp-manga and post ID
+    if (preg_match('/var\s+manga\s*=\s*{\s*id\s*:\s*(\d+)/is', $html, $manga_matches) &&
+        preg_match('/var\s+chapter_type\s*=\s*[\'"]([^\'"]+)[\'"]/is', $html, $type_matches) &&
+        preg_match('/_wpnonce\s*:\s*[\'"]([^\'"]+)[\'"]/i', $html, $nonce2_matches)) {
+        
+        $this->logger->debug('Extracted AJAX data using pattern 2', [
+            'manga_id' => $manga_matches[1],
+            'type' => $type_matches[1],
+            'nonce' => $nonce2_matches[1]
+        ]);
+        
+        return array(
+            'action' => 'manga_get_chapters',
+            'manga' => $manga_matches[1],
+            'type' => $type_matches[1],
+            '_wpnonce' => $nonce2_matches[1],
+        );
+    }
+    
+    // Pattern 3: Using data attributes in DOM
+    if (preg_match('/data-id=[\'"](\d+)[\'"].*?data-chapter-type=[\'"]([^\'"]+)[\'"]/is', $html, $data_matches) &&
+        preg_match('/_wpnonce\s*[:=]\s*[\'"]([^\'"]+)[\'"]/i', $html, $nonce3_matches)) {
+        
+        $this->logger->debug('Extracted AJAX data using pattern 3', [
+            'manga_id' => $data_matches[1],
+            'type' => $data_matches[2],
+            'nonce' => $nonce3_matches[1]
+        ]);
+        
+        return array(
+            'action' => 'manga_get_chapters',
+            'manga' => $data_matches[1],
+            'type' => $data_matches[2],
+            '_wpnonce' => $nonce3_matches[1],
+        );
+    }
+    
+    // Pattern 4: Specific for newer Madara versions
+    if (preg_match('/post_id\s*[:=]\s*[\'"]?(\d+)[\'"]?/i', $html, $post_matches) &&
+        preg_match('/chapter_type\s*[:=]\s*[\'"]([^\'"]+)[\'"]/i', $html, $chap_type_matches) &&
+        preg_match('/nonce\s*[:=]\s*[\'"]([^\'"]+)[\'"]/i', $html, $ajax_nonce_matches)) {
+        
+        $this->logger->debug('Extracted AJAX data using pattern 4', [
+            'manga_id' => $post_matches[1],
+            'type' => $chap_type_matches[1],
+            'nonce' => $ajax_nonce_matches[1]
+        ]);
+        
+        return array(
+            'action' => 'manga_get_chapters',
+            'manga' => $post_matches[1],
+            'type' => $chap_type_matches[1],
+            '_wpnonce' => $ajax_nonce_matches[1],
+        );
+    }
+    
+    // Log detailed information about the failure for debugging
+    $this->logger->error('Failed to extract AJAX data', [
+        'html_excerpt' => substr($html, 0, 500) . '...' // Log first 500 chars for debug purposes
+    ]);
+    
+    // Check for indicators of the manga page structure
+    $has_manga_structure = 
+        strpos($html, 'wp-manga') !== false || 
+        strpos($html, 'manga-chapters-holder') !== false ||
+        strpos($html, 'manga-detail') !== false;
+        
+    if (!$has_manga_structure) {
+        $this->logger->error('Page does not appear to be a valid Madara manga page');
+    }
+    
+    return false;
+}
 }

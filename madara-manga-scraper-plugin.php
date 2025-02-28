@@ -125,9 +125,6 @@ class Madara_Manga_Scraper {
     /**
      * Initialize plugin components
      */
-/**
-     * Initialize plugin components
-     */
     private function init_components() {
         // First, create the database
         $this->database = new \MadaraMangaScraper\Database\Database();
@@ -221,6 +218,14 @@ class Madara_Manga_Scraper {
         add_action('wp_ajax_mms_clear_queue', array($this->admin, 'clear_queue'));
         add_action('wp_ajax_mms_clear_logs', array($this->admin, 'clear_logs'));
         add_action('wp_ajax_mms_scrape_now', array($this->admin, 'scrape_now'));
+        add_action('wp_ajax_mms_retry_failed', array($this->admin, 'retry_failed'));
+        add_action('wp_ajax_mms_reset_processing', array($this->admin, 'reset_processing'));
+        add_action('wp_ajax_mms_process_queue_now', array($this->admin, 'process_queue_now'));
+        add_action('wp_ajax_mms_run_task_now', array($this->admin, 'run_task_now'));
+        add_action('wp_ajax_mms_get_manga_details', array($this->admin, 'get_manga_details'));
+        add_action('wp_ajax_mms_get_manga_chapters', array($this->admin, 'get_manga_chapters'));
+        add_action('wp_ajax_mms_remove_manga', array($this->admin, 'remove_manga'));
+        add_action('wp_ajax_mms_remove_queue_item', array($this->admin, 'remove_queue_item'));
         
         // Add cron action handlers
         add_action('mms_daily_check_sources', array($this->scheduler, 'check_sources_for_updates'));

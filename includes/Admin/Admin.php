@@ -164,6 +164,7 @@ class Admin {
             wp_localize_script('mms-admin', 'mms_data', array(
                 'ajax_url' => admin_url('admin-ajax.php'),
                 'nonce' => wp_create_nonce('mms_nonce'),
+                'admin_url' => admin_url('admin.php'),
             ));
         }
     }
@@ -687,5 +688,422 @@ class Admin {
         } else {
             wp_send_json_error(array('message' => __('Failed to scrape item. Check logs for details.', 'madara-manga-scraper')));
         }
+    }
+
+    /**
+     * AJAX handler for retrying failed items
+     */
+    public function retry_failed() {
+        // Check nonce
+        if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'mms_nonce')) {
+            wp_send_json_error(array('message' => __('Invalid nonce, please refresh the page.', 'madara-manga-scraper')));
+        }
+        
+        // Check user capability
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(array('message' => __('You do not have permission to perform this action.', 'madara-manga-scraper')));
+        }
+        
+        // Retry failed items
+        $count = $this->queue->retry_failed_items();
+        
+        if ($count !== false) {
+            wp_send_json_success(array('message' => sprintf(__('%d failed items reset successfully.', 'madara-manga-scraper'), $count)));
+        } else {
+            wp_send_json_error(array('message' => __('Failed to retry failed items.', 'madara-manga-scraper')));
+        }
+    }
+
+    /**
+     * AJAX handler for resetting processing items
+     */
+    public function reset_processing() {
+        // Check nonce
+        if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'mms_nonce')) {
+            wp_send_json_error(array('message' => __('Invalid nonce, please refresh the page.', 'madara-manga-scraper')));
+        }
+        
+        // Check user capability
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(array('message' => __('You do not have permission to perform this action.', 'madara-manga-scraper')));
+        }
+        
+        // Reset processing items
+        $count = $this->queue->reset_processing_items();
+        
+        if ($count !== false) {
+            wp_send_json_success(array('message' => sprintf(__('%d processing items reset successfully.', 'madara-manga-scraper'), $count)));
+        } else {
+            wp_send_json_error(array('message' => __('Failed to reset processing items.', 'madara-manga-scraper')));
+        }
+    }
+
+    /**
+     * AJAX handler for processing queue now
+     */
+    public function process_queue_now() {
+        // Check nonce
+        if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'mms_nonce')) {
+            wp_send_json_error(array('message' => __('Invalid nonce, please refresh the page.', 'madara-manga-scraper')));
+        }
+        
+        // Check user capability
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(array('message' => __('You do not have permission to perform this action.', 'madara-manga-scraper')));
+        }
+        
+        // Process queue
+        $result = $this->queue->process_queue_items();
+        
+        if ($result) {
+            wp_send_json_success(array('message' => __('Queue processed successfully.', 'madara-manga-scraper')));
+        } else {
+            wp_send_json_error(array('message' => __('Some queue items failed to process. Check logs for details.', 'madara-manga-scraper')));
+        }
+    }
+
+    /**
+     * AJAX handler for running tasks now
+     */
+    public function run_task_now() {
+        // Check nonce
+        if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'mms_nonce')) {
+            wp_send_json_error(array('message' => __('Invalid nonce, please refresh the page.', 'madara-manga-scraper')));
+        }
+        
+        // Check user capability
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(array('message' => __('You do not have permission to perform this action.', 'madara-manga-scraper')));
+        }
+        
+        // Get task
+        $task = isset($_POST['task']) ? sanitize_text_field($_POST['task']) : '';
+        
+        if (empty($task)) {
+            wp_send_json_error(array('message' => __('Invalid task.', 'madara-manga-scraper')));
+        }
+        
+        // Run task
+        $result = $this->scheduler->run_now($task);
+        
+        if ($result) {
+            wp_send_json_success(array('message' => __('Task executed successfully.', 'madara-manga-scraper')));
+        } else {
+            wp_send_json_error(array('message' => __('Failed to execute task. Check logs for details.', 'madara-manga-scraper')));
+        }
+    }
+
+    /**
+     * AJAX handler for getting manga details
+     */
+    public function get_manga_details() {
+        // Check nonce
+        if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'mms_nonce')) {
+            wp_send_json_error(array('message' => __('Invalid nonce, please refresh the page.', 'madara-manga-scraper')));
+        }
+        
+        // Check user capability
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(array('message' => __('You do not have permission to perform this action.', 'madara-manga-scraper')));
+        }
+        
+        // Get manga ID
+        $manga_id = isset($_POST['manga_id']) ? intval($_POST['manga_id']) : 0;
+        
+        if (empty($manga_id)) {
+            wp_send_json_error(array('message' => __('Invalid manga ID.', 'madara-manga-scraper')));
+        }
+        
+        // Get manga details
+        $manga = $this->db->get_row('manga', array('id' => $manga_id));
+        
+        if (!$manga) {
+            wp_send_json_error(array('message' => __('Manga not found.', 'madara-manga-scraper')));
+        }
+        
+        // Get chapter count
+        $chapter_count = $this->db->count('chapters', array('manga_id' => $manga_id));
+        $downloaded_chapters = $this->db->count('chapters', array('manga_id' => $manga_id, 'downloaded' => 1));
+        
+        // Get source
+        $source = $this->db->get_row('sources', array('id' => $manga->source_id));
+        $source_name = $source ? $source->name : __('Unknown', 'madara-manga-scraper');
+        
+        // Prepare HTML
+        ob_start();
+        ?>
+        <div class="mms-manga-details-cover">
+            <?php if (!empty($manga->cover_url)) : ?>
+                <img src="<?php echo esc_url($manga->cover_url); ?>" alt="<?php echo esc_attr($manga->title); ?>" style="max-width: 200px;">
+            <?php endif; ?>
+        </div>
+        
+        <div class="mms-manga-details-info">
+            <table>
+                <tr>
+                    <th><?php _e('Title', 'madara-manga-scraper'); ?></th>
+                    <td><?php echo esc_html($manga->title); ?></td>
+                </tr>
+                <tr>
+                    <th><?php _e('Source', 'madara-manga-scraper'); ?></th>
+                    <td><?php echo esc_html($source_name); ?></td>
+                </tr>
+                <tr>
+                    <th><?php _e('Status', 'madara-manga-scraper'); ?></th>
+                    <td><?php echo esc_html($manga->status); ?></td>
+                </tr>
+                <tr>
+                    <th><?php _e('Chapters', 'madara-manga-scraper'); ?></th>
+                    <td><?php echo $downloaded_chapters; ?>/<?php echo $chapter_count; ?></td>
+                </tr>
+                <tr>
+                    <th><?php _e('Last Chapter', 'madara-manga-scraper'); ?></th>
+                    <td><?php echo esc_html($manga->last_chapter_number); ?></td>
+                </tr>
+                <tr>
+                    <th><?php _e('Genres', 'madara-manga-scraper'); ?></th>
+                    <td><?php echo esc_html($manga->genres); ?></td>
+                </tr>
+                <tr>
+                    <th><?php _e('Authors', 'madara-manga-scraper'); ?></th>
+                    <td><?php echo esc_html($manga->authors); ?></td>
+                </tr>
+                <tr>
+                    <th><?php _e('Artists', 'madara-manga-scraper'); ?></th>
+                    <td><?php echo esc_html($manga->artists); ?></td>
+                </tr>
+                <tr>
+                    <th><?php _e('Added', 'madara-manga-scraper'); ?></th>
+                    <td><?php echo date_i18n(get_option('date_format') . ' ' . get_option('time_format'), strtotime($manga->created_at)); ?></td>
+                </tr>
+                <tr>
+                    <th><?php _e('Updated', 'madara-manga-scraper'); ?></th>
+                    <td><?php echo date_i18n(get_option('date_format') . ' ' . get_option('time_format'), strtotime($manga->updated_at)); ?></td>
+                </tr>
+                <?php if ($manga->wp_post_id) : ?>
+                    <tr>
+                        <th><?php _e('WordPress Post', 'madara-manga-scraper'); ?></th>
+                        <td>
+                            <a href="<?php echo get_permalink($manga->wp_post_id); ?>" target="_blank"><?php _e('View Post', 'madara-manga-scraper'); ?></a> |
+                            <a href="<?php echo admin_url('post.php?post=' . $manga->wp_post_id . '&action=edit'); ?>" target="_blank"><?php _e('Edit Post', 'madara-manga-scraper'); ?></a>
+                        </td>
+                    </tr>
+                <?php endif; ?>
+            </table>
+            
+            <div class="mms-manga-details-description">
+                <h3><?php _e('Description', 'madara-manga-scraper'); ?></h3>
+                <div><?php echo wpautop(esc_html($manga->description)); ?></div>
+            </div>
+        </div>
+        <?php
+        $html = ob_get_clean();
+        
+        wp_send_json_success(array('html' => $html));
+    }
+
+    /**
+     * AJAX handler for getting manga chapters
+     */
+    public function get_manga_chapters() {
+        // Check nonce
+        if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'mms_nonce')) {
+            wp_send_json_error(array('message' => __('Invalid nonce, please refresh the page.', 'madara-manga-scraper')));
+        }
+        
+        // Check user capability
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(array('message' => __('You do not have permission to perform this action.', 'madara-manga-scraper')));
+        }
+        
+        // Get manga ID
+        $manga_id = isset($_POST['manga_id']) ? intval($_POST['manga_id']) : 0;
+        
+        if (empty($manga_id)) {
+            wp_send_json_error(array('message' => __('Invalid manga ID.', 'madara-manga-scraper')));
+        }
+        
+        // Get manga
+        $manga = $this->db->get_row('manga', array('id' => $manga_id));
+        
+        if (!$manga) {
+            wp_send_json_error(array('message' => __('Manga not found.', 'madara-manga-scraper')));
+        }
+        
+        // Get chapters
+        $chapters = $this->scraper->get_chapters(array(
+            'manga_id' => $manga_id,
+            'orderby' => 'chapter_number',
+            'order' => 'DESC',
+        ));
+        
+        // Prepare HTML
+        ob_start();
+        ?>
+        <h3><?php echo esc_html($manga->title); ?> - <?php _e('Chapters', 'madara-manga-scraper'); ?></h3>
+        
+        <?php if (empty($chapters)) : ?>
+            <div class="notice notice-info inline">
+                <p><?php _e('No chapters found.', 'madara-manga-scraper'); ?></p>
+            </div>
+        <?php else : ?>
+            <table class="mms-chapters-table">
+                <thead>
+                    <tr>
+                        <th><?php _e('Chapter', 'madara-manga-scraper'); ?></th>
+                        <th><?php _e('Title', 'madara-manga-scraper'); ?></th>
+                        <th><?php _e('Downloaded', 'madara-manga-scraper'); ?></th>
+                        <th><?php _e('Processed', 'madara-manga-scraper'); ?></th>
+                        <th><?php _e('Published', 'madara-manga-scraper'); ?></th>
+                        <th><?php _e('Actions', 'madara-manga-scraper'); ?></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ($chapters as $chapter) : ?>
+                        <tr>
+                            <td><?php echo esc_html($chapter->chapter_number); ?></td>
+                            <td><?php echo esc_html($chapter->title); ?></td>
+                            <td>
+                                <?php if ($chapter->downloaded) : ?>
+                                    <span class="mms-status mms-status-completed"><?php _e('Yes', 'madara-manga-scraper'); ?></span>
+                                <?php else : ?>
+                                    <span class="mms-status mms-status-pending"><?php _e('No', 'madara-manga-scraper'); ?></span>
+                                <?php endif; ?>
+                            </td>
+                            <td>
+                                <?php if ($chapter->processed) : ?>
+                                    <span class="mms-status mms-status-completed"><?php _e('Yes', 'madara-manga-scraper'); ?></span>
+                                <?php else : ?>
+                                    <span class="mms-status mms-status-pending"><?php _e('No', 'madara-manga-scraper'); ?></span>
+                                <?php endif; ?>
+                            </td>
+                            <td>
+                                <?php if ($chapter->published_date) : ?>
+                                    <?php echo date_i18n(get_option('date_format'), strtotime($chapter->published_date)); ?>
+                                <?php else : ?>
+                                    <?php _e('Unknown', 'madara-manga-scraper'); ?>
+                                <?php endif; ?>
+                            </td>
+                            <td>
+                                <?php if (!$chapter->downloaded) : ?>
+                                    <button class="button mms-scrape-now" data-id="<?php echo esc_attr($chapter->source_chapter_id); ?>" data-type="chapter" data-source="<?php echo intval($manga->source_id); ?>"><?php _e('Download', 'madara-manga-scraper'); ?></button>
+                                <?php elseif ($chapter->wp_post_id) : ?>
+                                    <a href="<?php echo get_permalink($chapter->wp_post_id); ?>" target="_blank" class="button"><?php _e('View', 'madara-manga-scraper'); ?></a>
+                                <?php endif; ?>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        <?php endif; ?>
+        <?php
+        $html = ob_get_clean();
+        
+        wp_send_json_success(array('html' => $html));
+    }
+
+    /**
+     * AJAX handler for removing manga
+     */
+    public function remove_manga() {
+        // Check nonce
+        if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'mms_nonce')) {
+            wp_send_json_error(array('message' => __('Invalid nonce, please refresh the page.', 'madara-manga-scraper')));
+        }
+        
+        // Check user capability
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(array('message' => __('You do not have permission to perform this action.', 'madara-manga-scraper')));
+        }
+        
+        // Get manga ID
+        $manga_id = isset($_POST['manga_id']) ? intval($_POST['manga_id']) : 0;
+        
+        if (empty($manga_id)) {
+            wp_send_json_error(array('message' => __('Invalid manga ID.', 'madara-manga-scraper')));
+        }
+        
+        // Get chapters
+        $chapters = $this->scraper->get_chapters(array(
+            'manga_id' => $manga_id,
+        ));
+        
+        // Delete chapters
+        foreach ($chapters as $chapter) {
+            // Delete chapter files
+            if ($chapter->images_path) {
+                $chapter_dir = WP_CONTENT_DIR . $chapter->images_path;
+                $this->delete_directory($chapter_dir);
+            }
+            
+            // Delete from database
+            $this->db->delete('chapters', array('id' => $chapter->id));
+        }
+        
+        // Delete manga
+        $result = $this->db->delete('manga', array('id' => $manga_id));
+        
+        if ($result) {
+            wp_send_json_success(array('message' => __('Manga and all associated chapters deleted successfully.', 'madara-manga-scraper')));
+        } else {
+            wp_send_json_error(array('message' => __('Failed to delete manga.', 'madara-manga-scraper')));
+        }
+    }
+
+    /**
+     * AJAX handler for removing queue item
+     */
+    public function remove_queue_item() {
+        // Check nonce
+        if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'mms_nonce')) {
+            wp_send_json_error(array('message' => __('Invalid nonce, please refresh the page.', 'madara-manga-scraper')));
+        }
+        
+        // Check user capability
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(array('message' => __('You do not have permission to perform this action.', 'madara-manga-scraper')));
+        }
+        
+        // Get queue item ID
+        $queue_id = isset($_POST['id']) ? intval($_POST['id']) : 0;
+        
+        if (empty($queue_id)) {
+            wp_send_json_error(array('message' => __('Invalid queue item ID.', 'madara-manga-scraper')));
+        }
+        
+        // Delete queue item
+        $result = $this->db->delete('queue', array('id' => $queue_id));
+        
+        if ($result) {
+            wp_send_json_success(array('message' => __('Queue item removed successfully.', 'madara-manga-scraper')));
+        } else {
+            wp_send_json_error(array('message' => __('Failed to remove queue item.', 'madara-manga-scraper')));
+        }
+    }
+
+    /**
+     * Helper function to delete a directory and its contents
+     *
+     * @param string $dir Directory to delete
+     * @return bool Success
+     */
+    private function delete_directory($dir) {
+        if (!file_exists($dir)) {
+            return true;
+        }
+        
+        $files = array_diff(scandir($dir), array('.', '..'));
+        
+        foreach ($files as $file) {
+            $path = $dir . '/' . $file;
+            
+            if (is_dir($path)) {
+                $this->delete_directory($path);
+            } else {
+                @unlink($path);
+            }
+        }
+        
+        return @rmdir($dir);
     }
 }

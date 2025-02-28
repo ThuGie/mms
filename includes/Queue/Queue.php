@@ -8,21 +8,21 @@ class Queue {
     /**
      * Queue item types
      */
-    const TYPE_MANGA = 'manga';
-    const TYPE_CHAPTER = 'chapter';
+    public const TYPE_MANGA = 'manga';
+    public const TYPE_CHAPTER = 'chapter';
 
     /**
      * Queue item statuses
      */
-    const STATUS_PENDING = 'pending';
-    const STATUS_PROCESSING = 'processing';
-    const STATUS_COMPLETED = 'completed';
-    const STATUS_FAILED = 'failed';
+    public const STATUS_PENDING = 'pending';
+    public const STATUS_PROCESSING = 'processing';
+    public const STATUS_COMPLETED = 'completed';
+    public const STATUS_FAILED = 'failed';
 
     /**
      * Queue processing batch size
      */
-    const BATCH_SIZE = 5;
+    public const BATCH_SIZE = 5;
 
     /**
      * Database instance

@@ -82,7 +82,7 @@ if (!defined('ABSPATH')) {
                                 <td class="column-message"><?php echo esc_html($log->message); ?></td>
                                 <td class="column-context">
                                     <?php if (!empty($log->context)) : ?>
-                                        <button class="button button-small mms-view-context" data-context="<?php echo esc_attr($log->context); ?>">
+                                        <button class="button button-small mms-view-context" data-context="<?php echo esc_attr(htmlspecialchars($log->context, ENT_QUOTES, 'UTF-8')); ?>">
                                             <?php _e('View Context', 'madara-manga-scraper'); ?>
                                         </button>
                                     <?php else : ?>
@@ -147,7 +147,7 @@ if (!defined('ABSPATH')) {
                                 <td class="column-message"><?php echo esc_html($error->error_message); ?></td>
                                 <td class="column-trace">
                                     <?php if (!empty($error->error_trace)) : ?>
-                                        <button class="button button-small mms-view-trace" data-trace="<?php echo esc_attr($error->error_trace); ?>">
+                                        <button class="button button-small mms-view-trace" data-trace="<?php echo esc_attr(htmlspecialchars($error->error_trace, ENT_QUOTES, 'UTF-8')); ?>">
                                             <?php _e('View Trace', 'madara-manga-scraper'); ?>
                                         </button>
                                     <?php else : ?>
@@ -343,6 +343,11 @@ if (!defined('ABSPATH')) {
     .hidden {
         display: none;
     }
+    
+    .mms-error {
+        color: #b20000;
+        font-weight: bold;
+    }
 </style>
 
 <script>
@@ -370,7 +375,15 @@ jQuery(document).ready(function($) {
     // View Log Context
     $('.mms-view-context').on('click', function() {
         var context = $(this).data('context');
-        var contextObj = JSON.parse(context);
+        var contextObj;
+        
+        try {
+            // First, try to parse the context as JSON
+            contextObj = JSON.parse(context);
+        } catch (e) {
+            // If it fails, display the raw context string
+            contextObj = {'raw_context': context};
+        }
         
         $('#mms-context-content pre').text(JSON.stringify(contextObj, null, 2));
         $('#mms-context-modal').css('display', 'block');
@@ -380,7 +393,13 @@ jQuery(document).ready(function($) {
     $('.mms-view-trace').on('click', function() {
         var trace = $(this).data('trace');
         
-        $('#mms-trace-content pre').text(trace);
+        // Handle case where trace might be already HTML-encoded or not valid
+        try {
+            $('#mms-trace-content pre').text(trace);
+        } catch (e) {
+            $('#mms-trace-content pre').html('<span class="mms-error">Error displaying trace data</span>');
+        }
+        
         $('#mms-trace-modal').css('display', 'block');
     });
     
@@ -425,10 +444,10 @@ jQuery(document).ready(function($) {
                     } else {
                         $('#mms-log-action-result').removeClass('hidden')
                             .find('div').removeClass('notice-success').addClass('notice-error')
-                            .find('p').text(response.data.message);
+                            .find('p').text(response.data.message || 'Unknown error');
                     }
                 },
-                error: function() {
+                error: function(xhr, status, error) {
                     $('.mms-clear-logs').prop('disabled', false).each(function() {
                         var btnType = $(this).data('type');
                         var btnLevel = $(this).data('level');
@@ -440,7 +459,7 @@ jQuery(document).ready(function($) {
                     
                     $('#mms-log-action-result').removeClass('hidden')
                         .find('div').removeClass('notice-success').addClass('notice-error')
-                        .find('p').text('<?php _e('An error occurred. Please try again.', 'madara-manga-scraper'); ?>');
+                        .find('p').text('<?php _e('An error occurred. Please try again.', 'madara-manga-scraper'); ?>' + (error ? ': ' + error : ''));
                 }
             });
         }
