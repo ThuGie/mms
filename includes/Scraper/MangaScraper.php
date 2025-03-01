@@ -436,54 +436,68 @@ class MangaScraper extends BaseScraper {
      * @return bool Success
      */
     private function queue_manga_chapters($manga_id, $source_id, $manga_db_id, $source, $body) {
-        // Extract AJAX data for chapters
+        // Try AJAX method first
         $ajax_data = $this->extract_ajax_data($body);
         
-        if (!$ajax_data) {
-            $this->logger->error('Failed to extract AJAX data for chapters', array(
-                'manga_id' => $manga_id,
-                'source_id' => $source_id,
-            ));
+        if ($ajax_data) {
+            // Make AJAX request for chapters
+            $ajax_url = $this->get_ajax_url($source->url);
             
-            return false;
+            $response = $this->make_request(
+                $ajax_url,
+                'POST',
+                $ajax_data
+            );
+            
+            if (!is_wp_error($response)) {
+                $ajax_body = wp_remote_retrieve_body($response);
+                $chapters = json_decode($ajax_body, true);
+                
+                if (isset($chapters['data']) && !empty($chapters['data'])) {
+                    return $this->process_chapters_data($chapters, $manga_id, $source_id, $manga_db_id);
+                }
+            }
         }
         
-        // Make AJAX request for chapters
-        $ajax_url = $this->get_ajax_url($source->url);
+        // If AJAX method fails, try direct HTML extraction
+        $this->logger->info('AJAX extraction failed, trying direct HTML method', array(
+            'manga_id' => $manga_id,
+            'source_id' => $source_id
+        ));
         
-        $response = $this->make_request(
-            $ajax_url,
-            'POST',
-            $ajax_data
-        );
+        $chapters = $this->extract_chapters_from_html($body);
         
-        if (is_wp_error($response)) {
-            $this->logger->error('Failed to get chapters via AJAX', array(
-                'url' => $ajax_url,
-                'error' => $response->get_error_message(),
-            ));
-            
-            return false;
+        if ($chapters && isset($chapters['data']) && !empty($chapters['data'])) {
+            return $this->process_chapters_data($chapters, $manga_id, $source_id, $manga_db_id);
         }
         
-        $body = wp_remote_retrieve_body($response);
-        $chapters = json_decode($body, true);
+        // If both methods fail, log error
+        $this->logger->error('Failed to extract chapters using both methods', array(
+            'manga_id' => $manga_id,
+            'source_id' => $source_id
+        ));
         
-        if (!isset($chapters['data']) || empty($chapters['data'])) {
-            $this->logger->warning('No chapters found', array(
-                'manga_id' => $manga_id,
-                'source_id' => $source_id,
-            ));
-            
-            return true;
-        }
-        
+        return false;
+    }
+
+    /**
+     * Process chapters data and add to database/queue
+     *
+     * @param array $chapters Chapters data
+     * @param string $manga_id Manga ID
+     * @param int $source_id Source ID
+     * @param int $manga_db_id Manga database ID
+     * @return bool Success
+     */
+    private function process_chapters_data($chapters, $manga_id, $source_id, $manga_db_id) {
         $chapter_count = 0;
         
         // Process chapters
         foreach ($chapters['data'] as $chapter) {
             // Extract chapter ID
-            $chapter_id = ScraperUtils::extract_chapter_id_from_url($chapter['url']);
+            $chapter_id = isset($chapter['chapter_id']) 
+                ? $chapter['chapter_id'] 
+                : ScraperUtils::extract_chapter_id_from_url($chapter['url']);
             
             if (!$chapter_id) {
                 continue;

@@ -368,112 +368,267 @@ abstract class BaseScraper {
     }
 
     /**
-     * Extract AJAX data for chapters
+     * Extract AJAX data for chapters with enhanced patterns
      *
      * @param string $html HTML content
      * @return array|false AJAX data or false on failure
      */
-/**
- * Extract AJAX data for chapters
- *
- * @param string $html HTML content
- * @return array|false AJAX data or false on failure
- */
-public function extract_ajax_data($html) {
-    $this->logger->debug('Attempting to extract AJAX data');
-    
-    // Different pattern matching approaches for different Madara theme implementations
-    
-    // Pattern 1: Standard Madara format with manga_id, chapter_type, and wpnonce
-    if (preg_match('/manga_id\s*:\s*[\'"]?(\d+)[\'"]?/i', $html, $manga_id_matches) &&
-        preg_match('/chapter_type\s*:\s*[\'"]([^\'"]+)[\'"]/i', $html, $chapter_type_matches) &&
-        preg_match('/_wpnonce\s*:\s*[\'"]([^\'"]+)[\'"]/i', $html, $nonce_matches)) {
+    public function extract_ajax_data($html) {
+        $this->logger->debug('Attempting to extract AJAX data');
         
-        $this->logger->debug('Extracted AJAX data using pattern 1', [
-            'manga_id' => $manga_id_matches[1],
-            'type' => $chapter_type_matches[1],
-            'nonce' => $nonce_matches[1]
+        // Set of patterns to try for each required parameter
+        
+        // Manga ID patterns
+        $manga_id_patterns = [
+            '/manga_id\s*:\s*[\'"]?(\d+)[\'"]?/i',
+            '/var\s+manga\s*=\s*{\s*id\s*:\s*(\d+)/is',
+            '/data-id=[\'"](\d+)[\'"]/is',
+            '/post_id\s*[:=]\s*[\'"]?(\d+)[\'"]?/i',
+            '/manga_id[\'"]\s*:\s*[\'"](\d+)[\'"]/i',
+            '/manga-id[\'"]?\s*[:=]\s*[\'"]?(\d+)[\'"]?/i',
+            '/id[\'"]?\s*[:=]\s*[\'"]?(\d+)[\'"]?.*?manga/is'
+        ];
+        
+        // Chapter type patterns
+        $chapter_type_patterns = [
+            '/chapter_type\s*:\s*[\'"]([^\'"]+)[\'"]/i',
+            '/var\s+chapter_type\s*=\s*[\'"]([^\'"]+)[\'"]/is',
+            '/data-chapter-type=[\'"]([^\'"]+)[\'"]/is',
+            '/chapter_type\s*[:=]\s*[\'"]([^\'"]+)[\'"]/i',
+            '/chapterType[\'"]\s*:\s*[\'"]([^\'"]+)[\'"]/i',
+            '/type[\'"]\s*[:=]\s*[\'"]([^\'"]+)[\'"]/i'
+        ];
+        
+        // Nonce patterns
+        $nonce_patterns = [
+            '/_wpnonce\s*:\s*[\'"]([^\'"]+)[\'"]/i',
+            '/nonce\s*[:=]\s*[\'"]([^\'"]+)[\'"]/i',
+            '/data-nonce=[\'"]([^\'"]+)[\'"]/is',
+            '/wp_manga_ajax_nonce[\'"]\s*:\s*[\'"]([^\'"]+)[\'"]/i',
+            '/mangaAjaxNonce[\'"]\s*[:=]\s*[\'"]([^\'"]+)[\'"]/i',
+            '/ajax_nonce[\'"]\s*[:=]\s*[\'"]([^\'"]+)[\'"]/i'
+        ];
+        
+        // Extract each parameter
+        $manga_id = null;
+        foreach ($manga_id_patterns as $pattern) {
+            if (preg_match($pattern, $html, $matches)) {
+                $manga_id = $matches[1];
+                $this->logger->debug('Found manga_id', ['pattern' => $pattern, 'value' => $manga_id]);
+                break;
+            }
+        }
+        
+        $chapter_type = null;
+        foreach ($chapter_type_patterns as $pattern) {
+            if (preg_match($pattern, $html, $matches)) {
+                $chapter_type = $matches[1];
+                $this->logger->debug('Found chapter_type', ['pattern' => $pattern, 'value' => $chapter_type]);
+                break;
+            }
+        }
+        
+        $nonce = null;
+        foreach ($nonce_patterns as $pattern) {
+            if (preg_match($pattern, $html, $matches)) {
+                $nonce = $matches[1];
+                $this->logger->debug('Found nonce', ['pattern' => $pattern, 'value' => $nonce]);
+                break;
+            }
+        }
+        
+        // If we found all parameters, return the AJAX data
+        if ($manga_id && $chapter_type && $nonce) {
+            $this->logger->debug('Successfully extracted AJAX data', [
+                'manga_id' => $manga_id,
+                'type' => $chapter_type,
+                'nonce' => $nonce
+            ]);
+            
+            return array(
+                'action' => 'manga_get_chapters',
+                'manga' => $manga_id,
+                'type' => $chapter_type,
+                '_wpnonce' => $nonce
+            );
+        }
+        
+        // Try to find the parameters in data attributes
+        $doc = new \DOMDocument();
+        @$doc->loadHTML(mb_convert_encoding($html, 'HTML-ENTITIES', 'UTF-8'));
+        $xpath = new \DOMXPath($doc);
+        
+        // Find elements with data attributes
+        $elements = $xpath->query('//*[@data-id or @data-manga-id or @data-post-id]');
+        
+        foreach ($elements as $element) {
+            $id = $element->getAttribute('data-id') ?: 
+                  $element->getAttribute('data-manga-id') ?: 
+                  $element->getAttribute('data-post-id');
+                  
+            $type = $element->getAttribute('data-type') ?: 
+                    $element->getAttribute('data-chapter-type') ?: 
+                    'manga';
+                    
+            $data_nonce = $element->getAttribute('data-nonce') ?: 
+                          $element->getAttribute('data-wpnonce') ?: 
+                          $element->getAttribute('data-wp-nonce');
+            
+            if ($id && $data_nonce) {
+                $this->logger->debug('Found AJAX data in DOM attributes', [
+                    'manga_id' => $id,
+                    'type' => $type,
+                    'nonce' => $data_nonce
+                ]);
+                
+                return array(
+                    'action' => 'manga_get_chapters',
+                    'manga' => $id,
+                    'type' => $type,
+                    '_wpnonce' => $data_nonce
+                );
+            }
+        }
+        
+        // Try for script JSON
+        $scripts = $xpath->query('//script[not(@src)]');
+        foreach ($scripts as $script) {
+            $content = $script->textContent;
+            
+            // Look for JSON structures
+            if (preg_match('/(?:var|let|const)\s+\w+\s*=\s*({[^;]+})/s', $content, $matches)) {
+                $json_str = $matches[1];
+                
+                // Try to fix common JSON issues in JavaScript objects
+                $json_str = preg_replace('/([{,])\s*(\w+)\s*:/s', '$1"$2":', $json_str);
+                $json_str = preg_replace('/:\s*\'([^\']+)\'/s', ':"$1"', $json_str);
+                
+                try {
+                    $data = json_decode($json_str, true);
+                    if (isset($data['manga_id']) && isset($data['nonce'])) {
+                        $this->logger->debug('Found AJAX data in script JSON', [
+                            'manga_id' => $data['manga_id'],
+                            'nonce' => $data['nonce']
+                        ]);
+                        
+                        return array(
+                            'action' => 'manga_get_chapters',
+                            'manga' => $data['manga_id'],
+                            'type' => isset($data['type']) ? $data['type'] : 'manga',
+                            '_wpnonce' => $data['nonce']
+                        );
+                    }
+                } catch (\Exception $e) {
+                    // Just continue if JSON decode fails
+                }
+            }
+        }
+        
+        // Log detailed information about the failure for debugging
+        $this->logger->warning('Failed to extract AJAX data', [
+            'html_excerpt' => substr($html, 0, 500) . '...' // Log first 500 chars for debug purposes
         ]);
         
+        return false;
+    }
+
+    /**
+     * Extract chapter information directly from HTML
+     *
+     * @param string $html HTML content of the manga page
+     * @return array|false Array of chapter data or false on failure
+     */
+    public function extract_chapters_from_html($html) {
+        $this->logger->debug('Attempting to extract chapters directly from HTML');
+        
+        // Use DOMDocument to parse HTML
+        $doc = new \DOMDocument();
+        @$doc->loadHTML(mb_convert_encoding($html, 'HTML-ENTITIES', 'UTF-8'));
+        $xpath = new \DOMXPath($doc);
+        
+        $chapters = array();
+        
+        // Try different selectors used by various Madara themes
+        
+        // Method 1: Standard Madara chapter listing
+        $chapter_items = $xpath->query('//div[contains(@class, "listing-chapters-wrap")]/ul/li/a');
+        
+        if ($chapter_items->length === 0) {
+            // Method 2: Alternative chapter listing
+            $chapter_items = $xpath->query('//div[contains(@class, "chapter-list")]/div[contains(@class, "row")]//a');
+        }
+        
+        if ($chapter_items->length === 0) {
+            // Method 3: Volume-based chapter listing
+            $chapter_items = $xpath->query('//ul[contains(@class, "main")]/li/a');
+        }
+        
+        if ($chapter_items->length === 0) {
+            // Method 4: Another common pattern
+            $chapter_items = $xpath->query('//div[contains(@class, "wp-manga-chapter")]/a');
+        }
+        
+        if ($chapter_items->length === 0) {
+            $this->logger->warning('No chapter items found in HTML');
+            return false;
+        }
+        
+        foreach ($chapter_items as $item) {
+            $chapter_url = $item->getAttribute('href');
+            $chapter_name = trim($item->textContent);
+            
+            // Try to extract chapter number from the text
+            $chapter_number = '';
+            if (preg_match('/chapter\s+([0-9\.]+)/i', $chapter_name, $matches)) {
+                $chapter_number = $matches[1];
+            } else if (preg_match('/^([0-9\.]+)/', $chapter_name, $matches)) {
+                $chapter_number = $matches[1];
+            } else {
+                // Try from URL
+                if (preg_match('/chapter-([0-9\.]+)/i', $chapter_url, $matches)) {
+                    $chapter_number = $matches[1];
+                }
+            }
+            
+            // Extract chapter ID from URL
+            $chapter_id = ScraperUtils::extract_chapter_id_from_url($chapter_url);
+            
+            if (!$chapter_id) {
+                continue;
+            }
+            
+            // Try to get chapter title
+            $title = '';
+            if (strpos($chapter_name, ':') !== false) {
+                $parts = explode(':', $chapter_name, 2);
+                $title = trim($parts[1]);
+            }
+            
+            // Get release date if available
+            $date = '';
+            $date_element = $xpath->query('./parent::*/span[contains(@class, "chapter-release-date")]', $item);
+            
+            if ($date_element->length > 0) {
+                $date = trim($date_element->item(0)->textContent);
+            }
+            
+            $chapters[] = array(
+                'chapter' => $chapter_number,
+                'title' => $title,
+                'url' => $chapter_url,
+                'date' => $date,
+                'chapter_id' => $chapter_id
+            );
+        }
+        
+        $this->logger->info('Extracted chapters directly from HTML', array(
+            'count' => count($chapters)
+        ));
+        
+        // Return in a format similar to the AJAX response
         return array(
-            'action' => 'manga_get_chapters',
-            'manga' => $manga_id_matches[1],
-            'type' => $chapter_type_matches[1],
-            '_wpnonce' => $nonce_matches[1],
+            'success' => true,
+            'data' => $chapters
         );
     }
-    
-    // Pattern 2: Alternative format with wp-manga and post ID
-    if (preg_match('/var\s+manga\s*=\s*{\s*id\s*:\s*(\d+)/is', $html, $manga_matches) &&
-        preg_match('/var\s+chapter_type\s*=\s*[\'"]([^\'"]+)[\'"]/is', $html, $type_matches) &&
-        preg_match('/_wpnonce\s*:\s*[\'"]([^\'"]+)[\'"]/i', $html, $nonce2_matches)) {
-        
-        $this->logger->debug('Extracted AJAX data using pattern 2', [
-            'manga_id' => $manga_matches[1],
-            'type' => $type_matches[1],
-            'nonce' => $nonce2_matches[1]
-        ]);
-        
-        return array(
-            'action' => 'manga_get_chapters',
-            'manga' => $manga_matches[1],
-            'type' => $type_matches[1],
-            '_wpnonce' => $nonce2_matches[1],
-        );
-    }
-    
-    // Pattern 3: Using data attributes in DOM
-    if (preg_match('/data-id=[\'"](\d+)[\'"].*?data-chapter-type=[\'"]([^\'"]+)[\'"]/is', $html, $data_matches) &&
-        preg_match('/_wpnonce\s*[:=]\s*[\'"]([^\'"]+)[\'"]/i', $html, $nonce3_matches)) {
-        
-        $this->logger->debug('Extracted AJAX data using pattern 3', [
-            'manga_id' => $data_matches[1],
-            'type' => $data_matches[2],
-            'nonce' => $nonce3_matches[1]
-        ]);
-        
-        return array(
-            'action' => 'manga_get_chapters',
-            'manga' => $data_matches[1],
-            'type' => $data_matches[2],
-            '_wpnonce' => $nonce3_matches[1],
-        );
-    }
-    
-    // Pattern 4: Specific for newer Madara versions
-    if (preg_match('/post_id\s*[:=]\s*[\'"]?(\d+)[\'"]?/i', $html, $post_matches) &&
-        preg_match('/chapter_type\s*[:=]\s*[\'"]([^\'"]+)[\'"]/i', $html, $chap_type_matches) &&
-        preg_match('/nonce\s*[:=]\s*[\'"]([^\'"]+)[\'"]/i', $html, $ajax_nonce_matches)) {
-        
-        $this->logger->debug('Extracted AJAX data using pattern 4', [
-            'manga_id' => $post_matches[1],
-            'type' => $chap_type_matches[1],
-            'nonce' => $ajax_nonce_matches[1]
-        ]);
-        
-        return array(
-            'action' => 'manga_get_chapters',
-            'manga' => $post_matches[1],
-            'type' => $chap_type_matches[1],
-            '_wpnonce' => $ajax_nonce_matches[1],
-        );
-    }
-    
-    // Log detailed information about the failure for debugging
-    $this->logger->error('Failed to extract AJAX data', [
-        'html_excerpt' => substr($html, 0, 500) . '...' // Log first 500 chars for debug purposes
-    ]);
-    
-    // Check for indicators of the manga page structure
-    $has_manga_structure = 
-        strpos($html, 'wp-manga') !== false || 
-        strpos($html, 'manga-chapters-holder') !== false ||
-        strpos($html, 'manga-detail') !== false;
-        
-    if (!$has_manga_structure) {
-        $this->logger->error('Page does not appear to be a valid Madara manga page');
-    }
-    
-    return false;
-}
 }
